@@ -1,0 +1,7 @@
+plugins {
+    // Unobfuscated Minecraft (26.1+)
+    id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
+    // Obfuscated Minecraft (1.21.11 and older)
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_remap_version}" apply false
+    id 'net.neoforged.moddev' version "${moddev_version}" apply false
+}
