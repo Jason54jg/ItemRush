@@ -74,9 +74,11 @@ public final class ItemRushCommands {
 
         // 26.x: Commands.hasPermission(Commands.LEVEL_*)
         try {
+            // 0=all, 1=mod, 2=gamemaster (config default), 3=admin, 4=owner
             String field = switch (clamped) {
                 case 0 -> "LEVEL_ALL";
                 case 1 -> "LEVEL_MODERATORS";
+                case 2 -> "LEVEL_GAMEMASTERS";
                 case 3 -> "LEVEL_ADMINS";
                 case 4 -> "LEVEL_OWNERS";
                 default -> "LEVEL_GAMEMASTERS";

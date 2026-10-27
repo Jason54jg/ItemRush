@@ -249,6 +249,8 @@ public final class GameManager {
         ClientboundSetSubtitleTextPacket subtitlePacket = new ClientboundSetSubtitleTextPacket(subtitle);
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             player.connection.send(times);
+            // Subtitle must be queued before title: Hud#setTitle starts the display timer,
+            // while Hud#setSubtitle only stores text shown alongside an active title.
             player.connection.send(subtitlePacket);
             player.connection.send(titlePacket);
         }
