@@ -28,7 +28,7 @@ public final class ItemRushCommands {
                 .then(Commands.literal("start")
                         .requires(permission)
                         .executes(ctx -> start(ctx.getSource(), ItemRushConfig.get().defaultDurationSeconds))
-                        .then(Commands.argument("duration_in_seconds", IntegerArgumentType.integer(5, 3600))
+                        .then(Commands.argument("duration_in_seconds", IntegerArgumentType.integer(0, 3600))
                                 .executes(ctx -> start(ctx.getSource(),
                                         IntegerArgumentType.getInteger(ctx, "duration_in_seconds")))))
                 .then(Commands.literal("stop")

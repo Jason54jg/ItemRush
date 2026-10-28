@@ -25,7 +25,9 @@ public final class ItemRushHud {
 
         if (ClientRoundState.phase() == ClientRoundState.Phase.ROULETTE
                 || ClientRoundState.phase() == ClientRoundState.Phase.PLAYING) {
-            renderTimer(graphics, font, screenW);
+            if (!ClientRoundState.isUnlimited()) {
+                renderTimer(graphics, font, screenW);
+            }
             renderRoulette(graphics, font, screenW);
         }
 
@@ -91,9 +93,12 @@ public final class ItemRushHud {
 
         int cy = screenH / 2 - 20;
         graphics.fill(screenW / 2 - 140, cy - 16, screenW / 2 + 140, cy + 36, argb(170, 0, 0, 0));
-        graphics.centeredText(font, title, screenW / 2, cy, titleColor);
+        // Use text() without shadow — drawCenteredString's built-in shadow looked like a double title.
+        int titleX = screenW / 2 - font.width(title) / 2;
+        graphics.text(font, title, titleX, cy, titleColor, false);
         if (!subtitle.isEmpty()) {
-            graphics.centeredText(font, subtitle, screenW / 2, cy + 16, argb(255, 230, 230, 230));
+            int subX = screenW / 2 - font.width(subtitle) / 2;
+            graphics.text(font, subtitle, subX, cy + 16, argb(255, 230, 230, 230), false);
         }
     }
 

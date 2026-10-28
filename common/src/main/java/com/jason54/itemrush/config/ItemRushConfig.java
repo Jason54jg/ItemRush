@@ -2,6 +2,8 @@ package com.jason54.itemrush.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.annotations.SerializedName;
 import com.jason54.itemrush.Constants;
 import com.jason54.itemrush.platform.Services;
@@ -22,8 +24,9 @@ public class ItemRushConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
     private static ItemRushConfig INSTANCE;
 
+    /** 0 = unlimited round time (default). */
     @SerializedName("default_duration_seconds")
-    public int defaultDurationSeconds = 120;
+    public int defaultDurationSeconds = 0;
 
     @SerializedName("command_permission_level")
     public int commandPermissionLevel = 2;
@@ -33,6 +36,14 @@ public class ItemRushConfig {
 
     @SerializedName("roulette_speed")
     public float rouletteSpeed = 1.0f;
+
+    /** After a win (or timed-out round if timed), start a new round automatically. */
+    @SerializedName("auto_restart")
+    public boolean autoRestart = true;
+
+    /** Delay before auto-restart so players can read the winner banner. */
+    @SerializedName("auto_restart_delay_ticks")
+    public int autoRestartDelayTicks = 100;
 
     /** When true, any registered item can be selected as the target. */
     @SerializedName("use_all_items")
@@ -74,12 +85,16 @@ public class ItemRushConfig {
         try {
             Files.createDirectories(path.getParent());
             if (Files.exists(path)) {
-                try (Reader reader = Files.newBufferedReader(path)) {
-                    ItemRushConfig cfg = GSON.fromJson(reader, ItemRushConfig.class);
-                    if (cfg != null) {
-                        cfg.validate();
-                        return cfg;
+                String raw = Files.readString(path);
+                ItemRushConfig cfg = GSON.fromJson(raw, ItemRushConfig.class);
+                if (cfg != null) {
+                    boolean migrated = migrateLegacy(cfg, raw);
+                    cfg.validate();
+                    if (migrated) {
+                        cfg.save(path);
+                        Constants.LOG.info("Migrated ItemRush config to unlimited time + auto-restart");
                     }
+                    return cfg;
                 }
             }
             ItemRushConfig defaults = new ItemRushConfig();
@@ -89,6 +104,33 @@ public class ItemRushConfig {
             Constants.LOG.error("Failed to load ItemRush config, using defaults", e);
             return new ItemRushConfig();
         }
+    }
+
+    /**
+     * Old configs had a 120s timer and no auto_restart keys (Gson would force autoRestart=false).
+     */
+    private static boolean migrateLegacy(ItemRushConfig cfg, String rawJson) {
+        JsonObject root;
+        try {
+            root = JsonParser.parseString(rawJson).getAsJsonObject();
+        } catch (Exception e) {
+            return false;
+        }
+        boolean changed = false;
+        if (!root.has("auto_restart")) {
+            cfg.autoRestart = true;
+            changed = true;
+        }
+        if (!root.has("auto_restart_delay_ticks")) {
+            cfg.autoRestartDelayTicks = 100;
+            changed = true;
+        }
+        // Previous built-in default was 120s; switch to unlimited when migrating.
+        if (!root.has("auto_restart") && cfg.defaultDurationSeconds == 120) {
+            cfg.defaultDurationSeconds = 0;
+            changed = true;
+        }
+        return changed;
     }
 
     public void save() {
@@ -108,14 +150,17 @@ public class ItemRushConfig {
     }
 
     private void validate() {
-        if (defaultDurationSeconds < 5) {
-            defaultDurationSeconds = 5;
+        if (defaultDurationSeconds < 0) {
+            defaultDurationSeconds = 0;
         }
         if (rouletteDurationTicks < 20) {
             rouletteDurationTicks = 20;
         }
         if (rouletteSpeed <= 0) {
             rouletteSpeed = 1.0f;
+        }
+        if (autoRestartDelayTicks < 20) {
+            autoRestartDelayTicks = 20;
         }
         if (commandPermissionLevel < 0) {
             commandPermissionLevel = 0;
@@ -179,6 +224,7 @@ public class ItemRushConfig {
         public String notRunning = "No ItemRush round is running.";
         public String statusIdle = "ItemRush is idle.";
         public String statusRunning = "ItemRush running — target: %item% — time left: %time%s";
+        public String statusRunningUnlimited = "ItemRush running — target: %item% — time: unlimited";
         public String statusRoulette = "ItemRush roulette spinning…";
     }
 

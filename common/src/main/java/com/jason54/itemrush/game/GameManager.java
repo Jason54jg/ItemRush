@@ -11,9 +11,6 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
-import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
-import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -33,10 +30,13 @@ public final class GameManager {
     private static Item targetItem;
     private static Identifier targetId;
     private static int rouletteTicksLeft;
-    private static int playTicksLeft;
+    /** Remaining play ticks; {@code -1} = unlimited. */
+    private static int playTicksLeft = -1;
+    /** 0 = unlimited. */
     private static int durationSeconds;
     private static MinecraftServer boundServer;
     private static boolean winnerLock;
+    private static int restartTicksLeft = -1;
 
     private GameManager() {
     }
@@ -53,7 +53,14 @@ public final class GameManager {
         return targetId;
     }
 
+    public static boolean isUnlimited() {
+        return playTicksLeft < 0 || durationSeconds <= 0;
+    }
+
     public static int getSecondsLeft() {
+        if (isUnlimited()) {
+            return -1;
+        }
         return Math.max(0, (playTicksLeft + 19) / 20);
     }
 
@@ -61,11 +68,17 @@ public final class GameManager {
         return phase == RoundPhase.PLAYING && !winnerLock;
     }
 
+    /**
+     * @param durationSeconds 0 or less = unlimited time
+     */
     public static Component start(MinecraftServer server, int durationSeconds) {
         ItemRushConfig config = ItemRushConfig.get();
         if (phase != RoundPhase.IDLE && phase != RoundPhase.ENDING) {
             return Component.literal(config.messages.alreadyRunning).withStyle(ChatFormatting.RED);
         }
+
+        // Cancel a pending auto-restart if an admin starts manually.
+        restartTicksLeft = -1;
 
         Item picked = TargetPool.pickTarget();
         Identifier id = BuiltInRegistries.ITEM.getKey(picked);
@@ -73,9 +86,11 @@ public final class GameManager {
         GameManager.boundServer = server;
         GameManager.targetItem = picked;
         GameManager.targetId = id;
-        GameManager.durationSeconds = Math.max(5, durationSeconds);
+        GameManager.durationSeconds = Math.max(0, durationSeconds);
         GameManager.rouletteTicksLeft = Math.max(20, config.rouletteDurationTicks);
-        GameManager.playTicksLeft = GameManager.durationSeconds * 20;
+        GameManager.playTicksLeft = GameManager.durationSeconds <= 0
+                ? -1
+                : GameManager.durationSeconds * 20;
         GameManager.winnerLock = false;
         GameManager.phase = RoundPhase.ROULETTE;
 
@@ -89,40 +104,61 @@ public final class GameManager {
 
         String msg = config.messages.roundStarted.replace("%item%", Component.translatable(picked.getDescriptionId()).getString());
         broadcast(server, Component.literal(msg).withStyle(ChatFormatting.GOLD));
-        Constants.LOG.info("ItemRush started — target={}", id);
+        Constants.LOG.info("ItemRush started — target={} unlimited={}", id, isUnlimited());
         return Component.literal("ItemRush started! Target will be revealed by the roulette.")
                 .withStyle(ChatFormatting.GREEN);
     }
 
     public static Component stop(MinecraftServer server) {
         ItemRushConfig config = ItemRushConfig.get();
-        if (phase == RoundPhase.IDLE) {
+        boolean wasRestarting = restartTicksLeft >= 0;
+        restartTicksLeft = -1;
+        if (phase == RoundPhase.IDLE && !wasRestarting) {
             return Component.literal(config.messages.notRunning).withStyle(ChatFormatting.RED);
         }
-        endRound(server, RoundEndPayload.REASON_STOPPED, "", "");
+        if (phase != RoundPhase.IDLE) {
+            endRound(server, RoundEndPayload.REASON_STOPPED, "", "", false);
+        }
         broadcast(server, Component.literal(config.messages.roundStopped).withStyle(ChatFormatting.YELLOW));
         return Component.literal(config.messages.roundStopped).withStyle(ChatFormatting.YELLOW);
     }
 
     public static Component status() {
         ItemRushConfig config = ItemRushConfig.get();
+        if (restartTicksLeft >= 0) {
+            return Component.literal("ItemRush restarting in " + ((restartTicksLeft + 19) / 20) + "s…")
+                    .withStyle(ChatFormatting.AQUA);
+        }
         return switch (phase) {
             case IDLE, ENDING -> Component.literal(config.messages.statusIdle);
             case ROULETTE -> Component.literal(config.messages.statusRoulette).withStyle(ChatFormatting.AQUA);
             case PLAYING -> {
                 String itemName = targetItem == null ? "?" : Component.translatable(targetItem.getDescriptionId()).getString();
-                String text = config.messages.statusRunning
-                        .replace("%item%", itemName)
-                        .replace("%time%", String.valueOf(getSecondsLeft()));
+                String text;
+                if (isUnlimited()) {
+                    text = config.messages.statusRunningUnlimited.replace("%item%", itemName);
+                } else {
+                    text = config.messages.statusRunning
+                            .replace("%item%", itemName)
+                            .replace("%time%", String.valueOf(getSecondsLeft()));
+                }
                 yield Component.literal(text).withStyle(ChatFormatting.GREEN);
             }
         };
     }
 
     /**
-     * Called every server tick while a round is active.
+     * Called every server tick while a round is active (or while auto-restart is pending).
      */
     public static void serverTick(MinecraftServer server) {
+        if (restartTicksLeft >= 0) {
+            restartTicksLeft--;
+            if (restartTicksLeft < 0) {
+                start(server, ItemRushConfig.get().defaultDurationSeconds);
+            }
+            return;
+        }
+
         if (phase == RoundPhase.IDLE || phase == RoundPhase.ENDING) {
             return;
         }
@@ -137,6 +173,10 @@ public final class GameManager {
         }
 
         if (phase == RoundPhase.PLAYING) {
+            // Unlimited: no countdown, no time-up.
+            if (playTicksLeft < 0) {
+                return;
+            }
             playTicksLeft--;
             if (playTicksLeft % 20 == 0) {
                 Services.PLATFORM.sendToAllPlayers(server, new TimerSyncPayload(getSecondsLeft()));
@@ -144,8 +184,7 @@ public final class GameManager {
             if (playTicksLeft <= 0) {
                 ItemRushConfig config = ItemRushConfig.get();
                 broadcast(server, Component.literal(config.messages.timeUp).withStyle(ChatFormatting.RED));
-                sendTitles(server, Component.literal("Time's up!"), Component.literal(config.messages.timeUp));
-                endRound(server, RoundEndPayload.REASON_TIME_UP, "", "");
+                endRound(server, RoundEndPayload.REASON_TIME_UP, "", "", config.autoRestart);
             }
         }
     }
@@ -201,11 +240,7 @@ public final class GameManager {
                 .replace("%reward%", reward.display());
         broadcast(server, Component.literal(chat).withStyle(ChatFormatting.LIGHT_PURPLE));
 
-        String title = config.messages.winnerTitle;
-        String subtitle = config.messages.winnerSubtitle
-                .replace("%player%", playerName)
-                .replace("%reward%", reward.display());
-        sendTitles(server, Component.literal(title), Component.literal(subtitle));
+        // Winner banner is shown via client RoundEndPayload HUD only (avoids double vanilla titles).
 
         if (config.particlesEnabled && winner.level() instanceof ServerLevel level) {
             level.sendParticles(ParticleTypes.TOTEM_OF_UNDYING,
@@ -220,13 +255,20 @@ public final class GameManager {
                     SoundSource.PLAYERS, 1.0f, 1.0f);
         }
 
-        endRound(server, RoundEndPayload.REASON_WINNER, playerName, reward.display());
+        endRound(server, RoundEndPayload.REASON_WINNER, playerName, reward.display(), config.autoRestart);
     }
 
-    private static void endRound(MinecraftServer server, int reason, String playerName, String reward) {
+    private static void endRound(MinecraftServer server, int reason, String playerName, String reward, boolean scheduleRestart) {
         phase = RoundPhase.ENDING;
         Services.PLATFORM.sendToAllPlayers(server, new RoundEndPayload(reason, playerName, reward));
+        ItemRushConfig config = ItemRushConfig.get();
+        int delay = Math.max(20, config.autoRestartDelayTicks);
         reset();
+        if (scheduleRestart) {
+            boundServer = server;
+            restartTicksLeft = delay;
+            Constants.LOG.info("ItemRush auto-restart in {} ticks", delay);
+        }
     }
 
     private static void reset() {
@@ -234,25 +276,12 @@ public final class GameManager {
         targetItem = null;
         targetId = null;
         rouletteTicksLeft = 0;
-        playTicksLeft = 0;
+        playTicksLeft = -1;
         winnerLock = false;
         boundServer = null;
     }
 
     private static void broadcast(MinecraftServer server, Component message) {
         server.getPlayerList().broadcastSystemMessage(message, false);
-    }
-
-    private static void sendTitles(MinecraftServer server, Component title, Component subtitle) {
-        ClientboundSetTitlesAnimationPacket times = new ClientboundSetTitlesAnimationPacket(10, 60, 20);
-        ClientboundSetTitleTextPacket titlePacket = new ClientboundSetTitleTextPacket(title);
-        ClientboundSetSubtitleTextPacket subtitlePacket = new ClientboundSetSubtitleTextPacket(subtitle);
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            player.connection.send(times);
-            // Subtitle must be queued before title: Hud#setTitle starts the display timer,
-            // while Hud#setSubtitle only stores text shown alongside an active title.
-            player.connection.send(subtitlePacket);
-            player.connection.send(titlePacket);
-        }
     }
 }

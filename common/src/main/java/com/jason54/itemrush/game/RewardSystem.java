@@ -11,6 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 
 import java.util.List;
 import java.util.Optional;
@@ -49,7 +50,7 @@ public final class RewardSystem {
                 return reward;
             }
         }
-        return rewards.getLast();
+        return rewards.get(rewards.size() - 1);
     }
 
     private static GrantedReward apply(ServerPlayer winner, ItemRushConfig.RewardEntry entry) {
@@ -78,12 +79,15 @@ public final class RewardSystem {
                 yield new GrantedReward("command", label);
             }
             default -> {
-                Identifier id = Identifier.parse(entry.id);
-                Item item = BuiltInRegistries.ITEM.getValue(id);
+                Item item = resolveItem(entry.id);
+                if (item == null || item == Items.AIR) {
+                    Constants.LOG.warn("Invalid reward item id: {}", entry.id);
+                    yield new GrantedReward("item", "invalid reward (" + entry.id + ")");
+                }
                 int count = Math.max(1, entry.count);
-                ItemStack stack = new ItemStack(item, count);
+                ItemStack stack = item.getDefaultInstance();
+                stack.setCount(count);
                 if (!winner.getInventory().add(stack)) {
-                    // Spawn leftover as a world item (avoids 26.3-only Prediction drop API).
                     ItemEntity dropped = new ItemEntity(
                             winner.level(), winner.getX(), winner.getY() + 0.5, winner.getZ(), stack);
                     dropped.setPickUpDelay(40);
@@ -91,10 +95,44 @@ public final class RewardSystem {
                 }
                 String label = entry.display != null && !entry.display.isBlank()
                         ? entry.display
-                        : count + "x " + stack.getHoverName().getString();
+                        : count + "x " + itemDisplayName(item);
                 yield new GrantedReward("item", label);
             }
         };
+    }
+
+    private static String itemDisplayName(Item item) {
+        return net.minecraft.network.chat.Component.translatable(item.getDescriptionId()).getString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Item resolveItem(String rawId) {
+        if (rawId == null || rawId.isBlank()) {
+            return null;
+        }
+        try {
+            Identifier id = Identifier.parse(rawId);
+            try {
+                Object optional = BuiltInRegistries.ITEM.getClass()
+                        .getMethod("getOptional", Identifier.class)
+                        .invoke(BuiltInRegistries.ITEM, id);
+                if (optional instanceof Optional<?> opt && opt.isPresent()) {
+                    Object value = opt.get();
+                    if (value instanceof Item item && item != Items.AIR) {
+                        return item;
+                    }
+                }
+            } catch (ReflectiveOperationException ignored) {
+                // fall through
+            }
+            Item value = BuiltInRegistries.ITEM.getValue(id);
+            if (value != null && value != Items.AIR) {
+                return value;
+            }
+        } catch (Exception e) {
+            Constants.LOG.warn("Failed to resolve reward item '{}': {}", rawId, e.toString());
+        }
+        return null;
     }
 
     public record GrantedReward(String type, String display) {

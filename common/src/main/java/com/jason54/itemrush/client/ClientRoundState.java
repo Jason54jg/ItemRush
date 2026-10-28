@@ -20,6 +20,8 @@ public final class ClientRoundState {
     private static Identifier targetId;
     private static ItemStack targetStack = ItemStack.EMPTY;
     private static int secondsLeft;
+    /** True when the round was started with duration &lt;= 0. */
+    private static boolean unlimited;
     private static int rouletteTicksTotal;
     private static int rouletteTicksLeft;
     private static float rouletteSpeed = 1.0f;
@@ -39,7 +41,8 @@ public final class ClientRoundState {
         targetId = target;
         targetStack = new ItemStack(item);
         displayStack = targetStack.copy();
-        secondsLeft = durationSeconds;
+        unlimited = durationSeconds <= 0;
+        secondsLeft = unlimited ? -1 : durationSeconds;
         rouletteTicksTotal = Math.max(1, rouletteTicks);
         rouletteTicksLeft = rouletteTicksTotal;
         rouletteSpeed = Math.max(0.1f, speed);
@@ -94,6 +97,7 @@ public final class ClientRoundState {
         targetStack = ItemStack.EMPTY;
         displayStack = ItemStack.EMPTY;
         secondsLeft = 0;
+        unlimited = false;
         rouletteTicksLeft = 0;
         resultReason = -1;
     }
@@ -116,6 +120,11 @@ public final class ClientRoundState {
 
     public static int secondsLeft() {
         return secondsLeft;
+    }
+
+    /** {@code true} when the server sent duration &lt;= 0 (no round timer). */
+    public static boolean isUnlimited() {
+        return unlimited;
     }
 
     public static int rouletteTicksLeft() {
