@@ -43,7 +43,17 @@ public final class FabricHudBootstrap {
                     registry.getClassLoader(),
                     new Class<?>[]{attach.getParameterTypes()[2]},
                     (proxy, method, args) -> {
-                        if (args != null && args.length >= 2) {
+                        String name = method.getName();
+                        if ("equals".equals(name)) {
+                            return proxy == args[0];
+                        }
+                        if ("hashCode".equals(name)) {
+                            return System.identityHashCode(proxy);
+                        }
+                        if ("toString".equals(name)) {
+                            return "ItemRushHudElement";
+                        }
+                        if (args != null && args.length >= 2 && args[0] != null) {
                             Object graphics = args[0];
                             float partial = 0f;
                             Object delta = args[1];
